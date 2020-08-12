@@ -17,15 +17,46 @@
  *
  */
 
-#include <zim/fileheader.h>
+#include <stdexcept>
+#ifdef _WIN32
+#include <windows.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <io.h>
+#include <fileapi.h>
+#endif
+
 #include <iostream>
 #include <sstream>
 
 #include "gtest/gtest.h"
+
+#include <zim/fileheader.h>
+
 #include "../src/buffer.h"
+
+#include "tempfile.h"
 
 namespace
 {
+
+using zim::unittests::TempFile;
+
+std::shared_ptr<zim::Buffer> write_to_buffer(zim::Fileheader &header)
+{
+  const TempFile tmpFile("test_header");
+  const auto tmp_fd = tmpFile.fd();
+  header.write(tmp_fd);
+  auto size = lseek(tmp_fd, 0, SEEK_END);
+
+  char* content = new char[size];
+  lseek(tmp_fd, 0, SEEK_SET);
+  if (read(tmp_fd, content, size) == -1)
+    throw std::runtime_error("Cannot read");
+  return std::shared_ptr<zim::Buffer>(new zim::MemoryBuffer<true>(content, zim::zsize_t(size)));
+}
+
 TEST(HeaderTest, read_write_header)
 {
   zim::Fileheader header;
@@ -49,15 +80,7 @@ TEST(HeaderTest, read_write_header)
   ASSERT_EQ(header.getLayoutPage(), 13U);
   ASSERT_EQ(header.getMimeListPos(), 72U);
 
-  std::stringstream s;
-  s << header;
-
-  std::string str_content = s.str();
-  int size = str_content.size();
-  char* content = new char[size];
-  memcpy(content, str_content.c_str(), size);
-  auto buffer = std::shared_ptr<zim::Buffer>(
-      new zim::MemoryBuffer<true>(content, zim::zsize_t(size)));
+  auto buffer = write_to_buffer(header);
   zim::Fileheader header2;
   header2.read(buffer);
 
@@ -72,9 +95,3 @@ TEST(HeaderTest, read_write_header)
 }
 
 }  // namespace
-
-int main(int argc, char** argv)
-{
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

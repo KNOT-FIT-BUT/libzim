@@ -20,7 +20,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
-#include <zim/writer/zimcreator.h>
+#include <zim/writer/creator.h>
 #include <zim/blob.h>
 
 class TestArticle : public zim::writer::Article
@@ -34,13 +34,12 @@ class TestArticle : public zim::writer::Article
     virtual ~TestArticle() = default;
 
     virtual std::string getAid() const;
-    virtual char getNamespace() const;
-    virtual std::string getUrl() const;
+    virtual zim::writer::Url getUrl() const;
     virtual std::string getTitle() const;
     virtual bool isRedirect() const;
     virtual bool shouldCompress() const { return true; }
     virtual std::string getMimeType() const;
-    virtual std::string getRedirectAid() const;
+    virtual zim::writer::Url getRedirectUrl() const;
     virtual bool shouldIndex() const { return false; }
     virtual zim::size_type getSize() const { return _data.size(); }
     virtual std::string getFilename() const { return ""; }
@@ -62,14 +61,9 @@ std::string TestArticle::getAid() const
   return _id;
 }
 
-char TestArticle::getNamespace() const
+zim::writer::Url TestArticle::getUrl() const
 {
-  return 'A';
-}
-
-std::string TestArticle::getUrl() const
-{
-  return _id;
+  return zim::writer::Url('A', _id);
 }
 
 std::string TestArticle::getTitle() const
@@ -87,28 +81,22 @@ std::string TestArticle::getMimeType() const
   return "text/plain";
 }
 
-std::string TestArticle::getRedirectAid() const
+zim::writer::Url TestArticle::getRedirectUrl() const
 {
-  return "";
+  return zim::writer::Url();
 }
 
 int main(int argc, char* argv[])
 {
-  std::vector<TestArticle> _articles;
   unsigned max = 16;
-  _articles.resize(max);
-  for (unsigned n = 0; n < max; ++n)
-  {
-    std::ostringstream id;
-    id << (n + 1);
-    _articles[n] = TestArticle(id.str());
-  }
-  try
-  {
-    zim::writer::ZimCreator c;
+  try {
+    zim::writer::Creator c(false, zim::zimcompZstd);
     c.startZimCreation("foo.zim");
-    for (auto& article:_articles)
+    for (unsigned n = 0; n < max; ++n)
     {
+      std::ostringstream id;
+      id << (n + 1);
+      auto article = std::make_shared<TestArticle>(id.str());
       c.addArticle(article);
     }
     c.finishZimCreation();

@@ -17,13 +17,13 @@
  *
  */
 
-#include <zim/zim.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #if defined(_MSC_VER)
 # include <BaseTsd.h>
   typedef SSIZE_T ssize_t;
@@ -31,7 +31,20 @@
 # include <unistd.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <io.h>
+#include <fileapi.h>
+#undef min
+#undef max
+#endif
+
 #include "gtest/gtest.h"
+
+#include <zim/zim.h>
 
 #include "../src/buffer.h"
 #include "../src/cluster.h"
@@ -40,11 +53,31 @@
 #include "../src/file_reader.h"
 #include "../src/writer/cluster.h"
 #include "../src/endian_tools.h"
-
 #include "../src/config.h"
+
+#include "tempfile.h"
 
 namespace
 {
+
+using zim::unittests::TempFile;
+
+std::shared_ptr<zim::Buffer> write_to_buffer(zim::writer::Cluster& cluster)
+{
+  const TempFile tmpFile("test_cluster");
+  cluster.close();
+  const auto tmp_fd = tmpFile.fd();
+  cluster.write(tmp_fd);
+  auto size = lseek(tmp_fd, 0, SEEK_END);
+
+  char* content = new char[size];
+  lseek(tmp_fd, 0, SEEK_SET);
+  if (read(tmp_fd, content, size) == -1)
+    throw std::runtime_error("Cannot read");
+  return std::shared_ptr<zim::Buffer>(
+      new zim::MemoryBuffer<true>(content, zim::zsize_t(size)));
+}
+
 TEST(ClusterTest, create_cluster)
 {
   zim::writer::Cluster cluster(zim::zimcompNone);
@@ -67,8 +100,6 @@ TEST(ClusterTest, create_cluster)
 
 TEST(ClusterTest, read_write_cluster)
 {
-  std::stringstream stream;
-
   zim::writer::Cluster cluster(zim::zimcompNone);
 
   std::string blob0("123456789012345678901234567890");
@@ -79,14 +110,10 @@ TEST(ClusterTest, read_write_cluster)
   cluster.addData(blob1.data(), zim::zsize_t(blob1.size()));
   cluster.addData(blob2.data(), zim::zsize_t(blob2.size()));
 
-  cluster.dump(stream);
-
-  std::string str_content = stream.str();
-  char* content = new char[str_content.size() - 1];
-  memcpy(content, str_content.c_str() + 1, str_content.size() - 1);
-  auto buffer = std::shared_ptr<zim::Buffer>(
-      new zim::MemoryBuffer<true>(content, zim::zsize_t(str_content.size() - 1)));
-  auto reader = std::shared_ptr<zim::Reader>(new zim::BufferReader(buffer));
+  auto buffer = write_to_buffer(cluster);
+  zim::CompressionType comp;
+  bool extended;
+  auto reader = std::shared_ptr<const zim::Reader>(zim::BufferReader(buffer).sub_clusterReader(zim::offset_t(0), &comp, &extended));
   zim::Cluster cluster2(reader, zim::zimcompNone, false);
   ASSERT_EQ(cluster2.count().v, 3U);
   ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(0)).v, blob0.size());
@@ -96,22 +123,16 @@ TEST(ClusterTest, read_write_cluster)
 
 TEST(ClusterTest, read_write_empty)
 {
-  std::stringstream stream;
-
   zim::writer::Cluster cluster(zim::zimcompNone);
 
   cluster.addData(0, zim::zsize_t(0));
   cluster.addData(0, zim::zsize_t(0));
   cluster.addData(0, zim::zsize_t(0));
 
-  cluster.dump(stream);
-
-  std::string str_content = stream.str();
-  char* content = new char[str_content.size() - 1];
-  memcpy(content, str_content.c_str() + 1, str_content.size() - 1);
-  auto buffer = std::shared_ptr<zim::Buffer>(
-      new zim::MemoryBuffer<true>(content, zim::zsize_t(str_content.size() - 1)));
-  auto reader = std::shared_ptr<zim::Reader>(new zim::BufferReader(buffer));
+  auto buffer = write_to_buffer(cluster);
+  zim::CompressionType comp;
+  bool extended;
+  auto reader = std::shared_ptr<const zim::Reader>(zim::BufferReader(buffer).sub_clusterReader(zim::offset_t(0), &comp, &extended));
   zim::Cluster cluster2(reader, zim::zimcompNone, false);
   ASSERT_EQ(cluster2.count().v, 3U);
   ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(0)).v, 0U);
@@ -122,8 +143,6 @@ TEST(ClusterTest, read_write_empty)
 #if defined(ENABLE_ZLIB)
 TEST(ClusterTest, read_write_clusterZ)
 {
-  std::stringstream stream;
-
   zim::writer::Cluster cluster(zim::zimcompZip);
 
   std::string blob0("123456789012345678901234567890");
@@ -134,22 +153,13 @@ TEST(ClusterTest, read_write_clusterZ)
   cluster.addData(blob1.data(), zim::zsize_t(blob1.size()));
   cluster.addData(blob2.data(), zim::zsize_t(blob2.size()));
 
-  cluster.dump(stream);
-
-  std::string str_content = stream.str();
-  int size = str_content.size();
-  char* content = new char[size];
-  memcpy(content, str_content.c_str(), size);
-  auto buffer = std::shared_ptr<zim::Buffer>(
-      new zim::MemoryBuffer<true>(content, zim::zsize_t(size)));
-  auto reader = std::shared_ptr<zim::Reader>(new zim::BufferReader(buffer));
+  auto buffer = write_to_buffer(cluster);
   zim::CompressionType comp;
   bool extended;
-  std::shared_ptr<const zim::Reader> clusterReader
-      = reader->sub_clusterReader(zim::offset_t(0), zim::zsize_t(size), &comp, &extended);
+  auto reader = std::shared_ptr<const zim::Reader>(zim::BufferReader(buffer).sub_clusterReader(zim::offset_t(0), &comp, &extended));
   ASSERT_EQ(comp, zim::zimcompZip);
   ASSERT_EQ(extended, false);
-  zim::Cluster cluster2(clusterReader, comp, extended);
+  zim::Cluster cluster2(reader, comp, extended);
   ASSERT_EQ(cluster2.count().v, 3U);
   ASSERT_EQ(cluster2.getCompression(), zim::zimcompZip);
   ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(0)).v, blob0.size());
@@ -167,8 +177,6 @@ TEST(ClusterTest, read_write_clusterZ)
 
 TEST(ClusterTest, read_write_clusterLzma)
 {
-  std::stringstream stream;
-
   zim::writer::Cluster cluster(zim::zimcompLzma);
 
   std::string blob0("123456789012345678901234567890");
@@ -179,22 +187,13 @@ TEST(ClusterTest, read_write_clusterLzma)
   cluster.addData(blob1.data(), zim::zsize_t(blob1.size()));
   cluster.addData(blob2.data(), zim::zsize_t(blob2.size()));
 
-  cluster.dump(stream);
-
-  std::string str_content = stream.str();
-  int size = str_content.size();
-  char* content = new char[size];
-  memcpy(content, str_content.c_str(), size);
-  auto buffer = std::shared_ptr<zim::Buffer>(
-      new zim::MemoryBuffer<true>(content, zim::zsize_t(size)));
-  auto reader = std::shared_ptr<zim::Reader>(new zim::BufferReader(buffer));
+  auto buffer = write_to_buffer(cluster);
   zim::CompressionType comp;
   bool extended;
-  std::shared_ptr<const zim::Reader> clusterReader
-      = reader->sub_clusterReader(zim::offset_t(0), zim::zsize_t(size), &comp, &extended);
+  auto reader = std::shared_ptr<const zim::Reader>(zim::BufferReader(buffer).sub_clusterReader(zim::offset_t(0), &comp, &extended));
   ASSERT_EQ(comp, zim::zimcompLzma);
   ASSERT_EQ(extended, false);
-  zim::Cluster cluster2(clusterReader, comp, extended);
+  zim::Cluster cluster2(reader, comp, extended);
   ASSERT_EQ(cluster2.count().v, 3U);
   ASSERT_EQ(cluster2.getCompression(), zim::zimcompLzma);
   ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(0)).v, blob0.size());
@@ -208,8 +207,43 @@ TEST(ClusterTest, read_write_clusterLzma)
   ASSERT_TRUE(std::equal(b.data(), b.end(), blob2.data()));
 }
 
+#if defined(ENABLE_ZSTD)
+TEST(ClusterTest, read_write_clusterZstd)
+{
+  zim::writer::Cluster cluster(zim::zimcompZstd);
+
+  std::string blob0("123456789012345678901234567890");
+  std::string blob1("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  std::string blob2("abcdefghijklmnopqrstuvwxyz");
+
+  cluster.addData(blob0.data(), zim::zsize_t(blob0.size()));
+  cluster.addData(blob1.data(), zim::zsize_t(blob1.size()));
+  cluster.addData(blob2.data(), zim::zsize_t(blob2.size()));
+
+  auto buffer = write_to_buffer(cluster);
+  zim::CompressionType comp;
+  bool extended;
+  auto reader = std::shared_ptr<const zim::Reader>(zim::BufferReader(buffer).sub_clusterReader(zim::offset_t(0), &comp, &extended));
+  ASSERT_EQ(comp, zim::zimcompZstd);
+  ASSERT_EQ(extended, false);
+  zim::Cluster cluster2(reader, comp, extended);
+  ASSERT_EQ(cluster2.count().v, 3U);
+  ASSERT_EQ(cluster2.getCompression(), zim::zimcompZstd);
+  ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(0)).v, blob0.size());
+  ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(1)).v, blob1.size());
+  ASSERT_EQ(cluster2.getBlobSize(zim::blob_index_t(2)).v, blob2.size());
+  auto b = cluster2.getBlob(zim::blob_index_t(0));
+  ASSERT_TRUE(std::equal(b.data(), b.end(), blob0.data()));
+  b = cluster2.getBlob(zim::blob_index_t(1));
+  ASSERT_TRUE(std::equal(b.data(), b.end(), blob1.data()));
+  b = cluster2.getBlob(zim::blob_index_t(2));
+  ASSERT_TRUE(std::equal(b.data(), b.end(), blob2.data()));
+}
+
+#endif
+
 #if !defined(__APPLE__)
-TEST(CluterTest, read_write_extended_cluster)
+TEST(ClusterTest, read_write_extended_cluster)
 {
   //zim::writer doesn't suport 32 bits architectures.
   if (SIZE_MAX == UINT32_MAX) {
@@ -227,10 +261,8 @@ TEST(CluterTest, read_write_extended_cluster)
   std::string blob2("abcdefghijklmnopqrstuvwxyz");
   zim::size_type bigger_than_4g = 1024LL*1024LL*1024LL*4LL+1024LL;
 
-  std::string str_content;
+  std::shared_ptr<zim::Buffer> buffer;
   {
-    std::stringstream stream;
-
     char* blob3 = nullptr;
     try {
       blob3 = new char[bigger_than_4g];
@@ -258,44 +290,14 @@ TEST(CluterTest, read_write_extended_cluster)
       delete[] blob3;
       // MEM = 4GiB
 
-      // This is a nasty hack.
-      // We preallocate the stream internal buffer to handle the content of our
-      // cluster. Without this, stringstream will reallocate its internal
-      // buffer as needed. As it tries to preallocate more memory than needed,
-      // it ends to allocate 12GiB. Plus our 4GiB cluster, we end to need 16GiB
-      // of memory.
-      // By allocating a buffer bigger than what we need (but not to big),
-      // we avoid a too big allocation and limit our global need to 12GiB.
-      // We would be nice to avoid the creation of the tmp string and limit
-      // ourselves to a global allocation of 8GiB but I don't know how to do
-      // it without creating a custom streambuf :/
-      {
-        std::string tmp;
-        tmp.reserve(bigger_than_4g + 1024LL);
-        // MEM = 8GiB
-        tmp.resize(bigger_than_4g + 1024LL);
-        stream.str(tmp);
-        // MEM = 12GiB
-        stream.str("");
-      }
-      // MEM = 8GiB (tmp is deleted)
-      cluster.dump(stream);
-      // MEM = 8GiB
+      buffer = write_to_buffer(cluster);
     }
-    // MEM = 4GiB (cluster is deleted)
-
-    str_content = stream.str();
-    // MEM = 8GiB
   }
-  // MEM = 4 GiB (stream is deleted)
-  auto size = str_content.size();
-  auto buffer = std::shared_ptr<zim::Buffer>(
-    new zim::MemoryBuffer<false>(str_content.data(), zim::zsize_t(size)));
   auto reader = std::shared_ptr<zim::Reader>(new zim::BufferReader(buffer));
   zim::CompressionType comp;
   bool extended;
   std::shared_ptr<const zim::Reader> clusterReader
-      = reader->sub_clusterReader(zim::offset_t(0), zim::zsize_t(size), &comp, &extended);
+      = reader->sub_clusterReader(zim::offset_t(0), &comp, &extended);
   ASSERT_EQ(extended, true);
   zim::Cluster cluster2(clusterReader, comp, extended);
   ASSERT_EQ(cluster2.count().v, 4U);
@@ -313,7 +315,7 @@ TEST(CluterTest, read_write_extended_cluster)
 }
 #endif
 
-TEST(CluterTest, read_extended_cluster)
+TEST(ClusterTest, read_extended_cluster)
 {
   std::FILE* tmpfile = std::tmpfile();
   int fd = fileno(tmpfile);
@@ -378,7 +380,7 @@ TEST(CluterTest, read_extended_cluster)
   zim::CompressionType comp;
   bool extended;
   std::shared_ptr<const zim::Reader> clusterReader
-      = reader->sub_clusterReader(zim::offset_t(0), reader->size(), &comp, &extended);
+      = reader->sub_clusterReader(zim::offset_t(0), &comp, &extended);
   ASSERT_EQ(extended, true);
   zim::Cluster cluster2(clusterReader, comp, extended);
   ASSERT_EQ(cluster2.count().v, 4U);
@@ -409,9 +411,3 @@ TEST(CluterTest, read_extended_cluster)
 
 
 }  // namespace
-
-int main(int argc, char** argv)
-{
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

@@ -23,6 +23,7 @@
 #include <zim/zim.h>
 #include "buffer.h"
 #include "zim_types.h"
+#include "file_reader.h"
 #include <iosfwd>
 #include <vector>
 #include <memory>
@@ -49,7 +50,7 @@ namespace zim
     public:
       Cluster(std::shared_ptr<const Reader> reader, CompressionType comp, bool isExtended);
       CompressionType getCompression() const   { return compression; }
-      bool isCompressed() const                { return compression == zimcompZip || compression == zimcompBzip2 || compression == zimcompLzma; }
+      bool isCompressed() const                { return compression != zimcompDefault && compression != zimcompNone; }
 
       blob_index_t count() const               { return blob_index_t(offsets.size() - 1); }
       zsize_t size() const;
@@ -62,6 +63,7 @@ namespace zim
       void clear();
 
       void init_from_buffer(Buffer& buffer);
+      static zsize_t read_size(const Reader* reader, bool isExtended, offset_t offset);
   };
 
 }

@@ -1,3 +1,156 @@
+libzim 6.1.8
+============
+
+ * Increase default timeout for test to 120 seconds/test
+ * Compression algorithm to use can be passed to `zim::writer::Creator`
+ * Add automatic debian packaging of libzim.
+ * Fix using of tmpdir (and now use env var TMPDIR) during tests.
+
+
+libzim 6.1.7
+============
+
+ * Do not assume urlPtrPos is just after the mimetype list.
+ * Fix compilation of compression test.
+ * Do not exit but throw an exception if an ASSERT is not fulfill.
+
+libzim 6.1.6
+============
+
+ * Better (faster) implementation of the ordering of article by cluster.
+ * Fix compression algorithm.
+
+libzim 6.1.5
+============
+
+ * [Writer] Remove unused declaration of classes.
+   Those classes were not implemented nor used at all.
+
+libzim 6.1.4
+============
+
+ * [Writer] Fix excessive memory usage. Data of the cluster were clean at the
+   end of the process, not once we don't need it.
+
+libzim 6.1.3
+============
+
+ * [Writer] Use a `.tmp` suffix and rename to `.zim` at the end of the write
+ proces.
+ * Add unit tests
+ * Do not include uncessary `windows.h` headers in public zim's headers.
+
+libzim 6.1.2
+============
+
+ * [CI] Fix codecov configuration
+ * [Writer] Fix threads synchronization at end of writing process.
+
+libzim 6.1.1
+============
+
+ * Fix bug around the find function
+
+libzim 6.1.0
+============
+
+ * Compile now on OpenBSD
+ * [Test] Use the main function provided by gtest.
+ * [CI] Move the CI compilation to github actions.
+ * Add stopwords for 54 new languages.
+ * [Writer] Improve the way we are writing cluster at zim creation time.
+   - Clusters are directly written in the zim file instead of using temporary
+     files.
+   - mimetypes are limited to 944 bytes.
+ * Add a new type of iterator to iterate over articles in a performant way
+   reducing decompression of clusters. This is now the new default iterator.
+ * Add support for zim files compressed with zstd compression algorithm.
+   This is not possible to use zstd to create zim file for now.
+
+libzim 6.0.2
+============
+
+ * Fix search suggestion parsing.
+
+libzim 6.0.1
+============
+
+ * Fix crash when trying to open an empty file.
+ * Ensure that pytest tests are run on the CI.
+
+libzim 6.0.0
+============
+
+ * [Writer] Index the articles in differents threads. This is a huge speed
+   improvement as the main thread in not blocked by indexing.
+ * Index the title only if `shouldIndex` return true.
+
+libzim 5.1.0
+============
+
+ * Improve indexation of the title.
+ * Better pertinence of suggestions (only for new zim files)
+ * Improvement of the speed of Leveinstein distance for suggestions (for old
+   zims)
+
+libzim 5.0.2
+============
+
+ * Improve README.
+ * Remove gtest as embeded subproject.
+ * Better lzma compression.
+ * Better performance of the leveinstein algorithm (better suggestions
+   performance)
+
+libzim 5.0.1
+============
+
+ * Update README.
+ * [Writer] Add debug information (print progress of the clusters writing).
+ * [Writer] Correctly print the url to the user.
+ * [CI] Add code coverage.
+
+libzim 5.0.0
+============
+
+ * Fix thread slipping for win32 crosscompilation.
+ * Fix a potential invalid access when reading dirent.
+ * Fix memory leak in the decompression algorithm.
+ * [Writer] Fix a memory leak (cluster cleanning)
+ * [Writer] Write article data in a temporary cluster file instead of a
+   temporary file per article.
+ * [Writer] Better algorithm to store the dirent while creating the zim
+   file. Better memory usage.
+ * [Writer] [API Change] Url/Ns are now handle using the same struct Url.
+ * [Writer] [API Change] No more aid and redirectAid. A redirectArticle
+   have to implement redirectUrl.
+ * [Writer] Use a memory pool to avoid multiple small memory allocations.
+ * [Writer] [API Change] Rename `ZimCreator` to `Creator`.
+ * [API Change] File's `search` and `suggestions` now return a unique_ptr
+   instead of a raw pointer.
+
+libzim 4.0.7
+============
+
+ * Build libzim without rpath.
+
+libzim 4.0.6
+============
+
+ * Support zim file created with cluster not written sequentially.
+ * Remove a meson warning.
+
+libzim 4.0.5
+============
+
+ * Store the xapian database in the right url.
+ * Do not fail when reading very small zim file (<256b).
+ * Do not print message on normal behavior.
+ * [BUILDSYSTEM] Be able to build a dynamic lib (libzim.so) but using static
+   dependencies.
+ * [CI] Use last version of meson.
+ * [CI] Use the new deps archive xz
+
 libzim 4.0.4
 ============
 

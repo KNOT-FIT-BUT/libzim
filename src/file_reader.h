@@ -39,7 +39,7 @@ class Reader {
 
     virtual void read(char* dest, offset_t offset, zsize_t size) const = 0;
     template<typename T>
-    T read(offset_t offset) const {
+    T read_uint(offset_t offset) const {
       ASSERT(offset.v, <, size().v);
       ASSERT(offset.v+sizeof(T), <=, size().v);
       char tmp_buf[sizeof(T)];
@@ -59,14 +59,13 @@ class Reader {
     virtual offset_t offset() const = 0;
 
     std::unique_ptr<const Reader> sub_clusterReader(offset_t offset,
-                                                    zsize_t size,
                                                     CompressionType* comp,
                                                     bool* extented) const;
 
     bool can_read(offset_t offset, zsize_t size);
 
   private:
-    std::shared_ptr<const Buffer> get_clusterBuffer(offset_t offset, zsize_t size, CompressionType comp) const;
+    std::shared_ptr<const Buffer> get_clusterBuffer(offset_t offset, CompressionType comp) const;
 };
 
 class FileReader : public Reader {

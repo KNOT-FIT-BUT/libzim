@@ -67,7 +67,6 @@ namespace zim
     return article_index_type(impl->getCountArticles());
   }
 
-
   Article File::getArticle(article_index_type idx) const
   {
     if (idx >= article_index_type(impl->getCountArticles()))
@@ -101,6 +100,16 @@ namespace zim
     return r.first
             ? Article(impl, article_index_type(impl->getIndexByTitle(r.second)))
             : Article();
+  }
+
+  Article File::getArticleByClusterOrder(article_index_type idx) const
+  {
+      auto res = impl->findxByClusterOrder(idx);
+
+      if (res.first)
+        return Article(impl, res.second.v);
+      else
+        return Article();
   }
 
   std::shared_ptr<const Cluster> File::getCluster(cluster_index_type idx) const
@@ -150,24 +159,27 @@ namespace zim
   }
 
   File::const_iterator File::begin() const
-  { return const_iterator(this, 0); }
+  { return const_iterator(this, 0, const_iterator::ClusterIterator); }
 
   File::const_iterator File::beginByTitle() const
   { return const_iterator(this, 0, const_iterator::ArticleIterator); }
 
+  File::const_iterator File::beginByUrl() const
+  { return const_iterator(this, 0, const_iterator::UrlIterator); }
+
   File::const_iterator File::end() const
-  { return const_iterator(this, getCountArticles()); }
+  { return const_iterator(this, getCountArticles(), const_iterator::UrlIterator); }
 
   File::const_iterator File::find(char ns, const std::string& url) const
   {
     std::pair<bool, article_index_t> r = impl->findx(ns, url);
-    return File::const_iterator(this, article_index_type(r.second));
+    return File::const_iterator(this, article_index_type(r.second), const_iterator::UrlIterator);
   }
 
   File::const_iterator File::find(const std::string& url) const
   {
     std::pair<bool, article_index_t> r = impl->findx(url);
-    return File::const_iterator(this, article_index_type(r.second));
+    return File::const_iterator(this, article_index_type(r.second), const_iterator::UrlIterator);
   }
 
   File::const_iterator File::findByTitle(char ns, const std::string& title) const
@@ -176,15 +188,15 @@ namespace zim
     return File::const_iterator(this, article_index_type(r.second), const_iterator::ArticleIterator);
   }
 
-  const Search* File::search(const std::string& query, int start, int end) const {
-      Search* search = new Search(this);
+  std::unique_ptr<Search> File::search(const std::string& query, int start, int end) const {
+      auto search = std::unique_ptr<Search>(new Search(this));
       search->set_query(query);
       search->set_range(start, end);
       return search;
   }
 
-  const Search* File::suggestions(const std::string& query, int start, int end) const {
-      Search* search = new Search(this);
+  std::unique_ptr<Search> File::suggestions(const std::string& query, int start, int end) const {
+      auto search = std::unique_ptr<Search>(new Search(this));
       search->set_query(query);
       search->set_range(start, end);
       search->set_suggestion_mode(true);
@@ -278,7 +290,6 @@ namespace zim
           state = state_0;
           break;
       }
-
     }
 
     switch (state)

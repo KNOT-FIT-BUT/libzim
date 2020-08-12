@@ -82,7 +82,9 @@ void
 setup_queryParser(Xapian::QueryParser* queryparser,
                   Xapian::Database& database,
                   const std::string& language,
-                  const std::string& stopwords) {
+                  const std::string& stopwords,
+                  bool newSuggestionFormat) {
+    queryparser->set_default_op(Xapian::Query::op::OP_AND);
     queryparser->set_database(database);
     if ( ! language.empty() )
     {
@@ -94,7 +96,8 @@ setup_queryParser(Xapian::QueryParser* queryparser,
         try {
             Xapian::Stem stemmer = Xapian::Stem(languageLocale.getLanguage());
             queryparser->set_stemmer(stemmer);
-            queryparser->set_stemming_strategy(Xapian::QueryParser::STEM_ALL);
+            queryparser->set_stemming_strategy(
+              newSuggestionFormat ? Xapian::QueryParser::STEM_SOME : Xapian::QueryParser::STEM_ALL);
         } catch (...) {
             std::cout << "No steemming for language '" << languageLocale.getLanguage() << "'" << std::endl;
         }
@@ -202,7 +205,6 @@ Search& Search::operator=(Search&& it) = default;
 Search::~Search() = default;
 
 void Search::set_verbose(bool verbose) {
-    std::cout << "set verbose" << std::endl;
     this->verbose = verbose;
 }
 
@@ -212,7 +214,7 @@ Search& Search::add_zimfile(const File* zimfile) {
 }
 
 Search& Search::set_query(const std::string& query) {
-    this->query = query; 
+    this->query = query;
     return *this;
 }
 
@@ -235,6 +237,8 @@ Search& Search::set_suggestion_mode(const bool suggestion_mode) {
     return *this;
 }
 
+#define WITH_LEV 1
+
 Search::iterator Search::begin() const {
 #if defined(ENABLE_XAPIAN)
     if ( this->search_started ) {
@@ -243,6 +247,7 @@ Search::iterator Search::begin() const {
 
     std::vector<const File*>::const_iterator it;
     bool first = true;
+    bool hasNewSuggestionFormat = false;
     std::string language;
     std::string stopwords;
     for(it=zimfiles.begin(); it!=zimfiles.end(); it++)
@@ -251,7 +256,16 @@ Search::iterator Search::begin() const {
         if (zimfile->is_multiPart()) {
             continue;
         }
-        zim::Article xapianArticle = zimfile->getArticle('X', "fulltext/xapian");
+        zim::Article xapianArticle;
+        if (suggestion_mode) {
+          xapianArticle = zimfile->getArticle('X', "title/xapian");
+          if (xapianArticle.good()) {
+            hasNewSuggestionFormat = true;
+          }
+        }
+        if (!xapianArticle.good()) {
+          xapianArticle = zimfile->getArticle('X', "fulltext/xapian");
+        }
         if (!xapianArticle.good()) {
           xapianArticle = zimfile->getArticle('Z', "/fulltextIndex/xapian");
         }
@@ -262,7 +276,6 @@ Search::iterator Search::begin() const {
         if (dbOffset == 0) {
             continue;
         }
-        std::cerr << "Try to open " << zimfile->getFilename() << " at offset " << dbOffset;
         DEFAULTFS::FD databasefd;
         try {
             databasefd = DEFAULTFS::openFile(zimfile->getFilename());
@@ -322,13 +335,12 @@ Search::iterator Search::begin() const {
         estimated_matches_number = 0;
         return nullptr;
     }
-    
+
     Xapian::QueryParser* queryParser = new Xapian::QueryParser();
     if (verbose) {
       std::cout << "Setup queryparser using language " << language << std::endl;
     }
-    queryParser->set_default_op(Xapian::Query::op::OP_AND);
-    setup_queryParser(queryParser, internal->database, language, stopwords);
+    setup_queryParser(queryParser, internal->database, language, stopwords, hasNewSuggestionFormat);
 
     std::string prefix = "";
     unsigned flags = Xapian::QueryParser::FLAG_DEFAULT;
@@ -337,7 +349,8 @@ Search::iterator Search::begin() const {
         std::cout << "Mark query as 'partial'" << std::endl;
       }
       flags |= Xapian::QueryParser::FLAG_PARTIAL;
-      if (this->prefixes.find("S") != std::string::npos ) {
+      if ( !hasNewSuggestionFormat
+        && this->prefixes.find("S") != std::string::npos ) {
         if (verbose) {
           std::cout << "Searching in title namespace" << std::endl;
         }
@@ -355,9 +368,11 @@ Search::iterator Search::begin() const {
         std::cout << "Parsed query '" << this->query << "' to " << query.get_description() << std::endl;
     }
     delete queryParser;
-    
+
     Xapian::Enquire enquire(internal->database);
-    Xapian::KeyMaker* keyMaker(nullptr);
+#if WITH_LEV
+    std::unique_ptr<Xapian::KeyMaker> keyMaker(nullptr);
+#endif
 
     if (geo_query && valuesmap.find("geo.position") != valuesmap.end()) {
         Xapian::GreatCircleMetric metric;
@@ -372,7 +387,8 @@ Search::iterator Search::begin() const {
 
     enquire.set_query(query);
 
-    if (suggestion_mode) {
+#if WITH_LEV
+    if (suggestion_mode && !hasNewSuggestionFormat) {
       size_t value_index = 0;
       bool has_custom_distance_maker = true;
       if ( !valuesmap.empty() ) {
@@ -387,15 +403,19 @@ Search::iterator Search::begin() const {
       auto temp_results = enquire.get_mset(0,0);
       if ( has_custom_distance_maker
         && temp_results.get_matches_estimated() <= MAX_MATCHES_TO_SORT ) {
-        keyMaker = new LevenshteinDistanceMaker(this->query, value_index);
-        enquire.set_sort_by_key(keyMaker, false);
+        keyMaker.reset(new LevenshteinDistanceMaker(this->query, value_index));
+        enquire.set_sort_by_key(keyMaker.get(), false);
       }
     }
-    
+#endif
+
+    if (suggestion_mode && valuesmap.find("title") != valuesmap.end()) {
+      enquire.set_collapse_key(valuesmap["title"]);
+    }
+
     internal->results = enquire.get_mset(this->range_start, this->range_end-this->range_start);
     search_started = true;
     estimated_matches_number = internal->results.get_matches_estimated();
-    delete keyMaker;
     return new search_iterator::InternalData(this, internal->results.begin());
 #else
     estimated_matches_number = 0;

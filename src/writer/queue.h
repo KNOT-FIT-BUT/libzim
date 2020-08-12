@@ -24,8 +24,7 @@
 
 #include <pthread.h>
 #include <queue>
-#include <chrono>
-#include <thread>
+#include "../tools.h"
 
 template<typename T>
 class Queue {
@@ -33,8 +32,10 @@ class Queue {
         Queue() {pthread_mutex_init(&m_queueMutex,NULL);};
         virtual ~Queue() {pthread_mutex_destroy(&m_queueMutex);};
         virtual bool isEmpty();
+        virtual size_t size();
         virtual void pushToQueue(const T& element);
-        virtual bool popFromQueue(T &filename);
+        virtual bool getHead(T &element);
+        virtual bool popFromQueue(T &element);
 
     protected:
         std::queue<T>   m_realQueue;
@@ -55,12 +56,20 @@ bool Queue<T>::isEmpty() {
 }
 
 template<typename T>
+size_t Queue<T>::size() {
+    pthread_mutex_lock(&m_queueMutex);
+    size_t retVal = m_realQueue.size();
+    pthread_mutex_unlock(&m_queueMutex);
+    return retVal;
+}
+
+template<typename T>
 void Queue<T>::pushToQueue(const T &element) {
     unsigned int wait = 0;
     unsigned int queueSize = 0;
 
     do {
-        std::this_thread::sleep_for(std::chrono::microseconds(wait));
+        zim::microsleep(wait);
         pthread_mutex_lock(&m_queueMutex);
         queueSize = m_realQueue.size();
         pthread_mutex_unlock(&m_queueMutex);
@@ -70,6 +79,18 @@ void Queue<T>::pushToQueue(const T &element) {
     pthread_mutex_lock(&m_queueMutex);
     m_realQueue.push(element);
     pthread_mutex_unlock(&m_queueMutex);
+}
+
+template<typename T>
+bool Queue<T>::getHead(T &element) {
+  pthread_mutex_lock(&m_queueMutex);
+  if (m_realQueue.empty()) {
+    pthread_mutex_unlock(&m_queueMutex);
+    return false;
+  }
+  element = m_realQueue.front();
+  pthread_mutex_unlock(&m_queueMutex);
+  return true;
 }
 
 template<typename T>

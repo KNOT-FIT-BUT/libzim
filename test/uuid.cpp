@@ -22,9 +22,12 @@
 #include <sstream>
 
 #include "gtest/gtest.h"
-
-#include <thread>
-#include <chrono>
+#ifdef _WIN32
+# include <windows.h>
+# include <synchapi.h>
+#else
+# include <unistd.h>
+#endif
 
 namespace
 {
@@ -91,7 +94,11 @@ TEST(UuidTest, generate)
   // same during generating uuid1 and uuid2 leading to test
   // failure. To bring the time difference between 2 sleep for a
   // second. Thanks to Pino Toscano.
-  std::this_thread::sleep_for(std::chrono::seconds(1));
+#ifdef _WIN32
+  Sleep(1000);
+#else
+  sleep(1);
+#endif
 
   uuid2 = zim::Uuid::generate();
   ASSERT_TRUE(uuid1 != uuid2);
@@ -109,9 +116,3 @@ TEST(UuidTest, output)
   ASSERT_EQ(s, "550e8400-e29b-41d4-a716-446655440000");
 }
 };
-
-int main(int argc, char** argv)
-{
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}
