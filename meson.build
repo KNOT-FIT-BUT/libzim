@@ -1,5 +1,5 @@
 project('libzim', ['c', 'cpp'],
-  version : '6.1.8',
+  version : '6.3.0',
   license : 'GPL2',
   default_options : ['c_std=c11', 'cpp_std=c++11'])
 
@@ -7,11 +7,13 @@ if build_machine.system() != 'windows'
   add_project_arguments('-D_LARGEFILE64_SOURCE=1', '-D_FILE_OFFSET_BITS=64', language: 'cpp')
 endif
 
-sizeof_off_t = meson.get_compiler('cpp').sizeof('off_t')
+cpp = meson.get_compiler('cpp')
+sizeof_off_t = cpp.sizeof('off_t')
 
 conf = configuration_data()
 conf.set('VERSION', '"@0@"'.format(meson.project_version()))
 conf.set('DIRENT_CACHE_SIZE', get_option('DIRENT_CACHE_SIZE'))
+conf.set('DIRENT_LOOKUP_CACHE_SIZE', get_option('DIRENT_LOOKUP_CACHE_SIZE'))
 conf.set('CLUSTER_CACHE_SIZE', get_option('CLUSTER_CACHE_SIZE'))
 conf.set('LZMA_MEMORY_SIZE', get_option('LZMA_MEMORY_SIZE'))
 conf.set10('MMAP_SUPPORT_64', sizeof_off_t==8)
@@ -25,20 +27,20 @@ conf.set('ENABLE_USE_BUFFER_HEADER', get_option('USE_BUFFER_HEADER'))
 static_linkage = get_option('static-linkage')
 static_linkage = static_linkage or get_option('default_library')=='static'
 
-zlib_dep = dependency('zlib', required:false, static:static_linkage)
-conf.set('ENABLE_ZLIB', zlib_dep.found())
-
 lzma_dep = dependency('liblzma', static:static_linkage)
 
-zstd_dep = dependency('libzstd', required:false, static:static_linkage)
-conf.set('ENABLE_ZSTD', zstd_dep.found())
+zstd_dep = dependency('libzstd', static:static_linkage)
+
+if target_machine.system() == 'freebsd'
+    execinfo_dep = cpp.find_library('execinfo')
+endif
 
 xapian_dep = dependency('xapian-core',
                         required:false,
                         static:static_linkage)
 conf.set('ENABLE_XAPIAN', xapian_dep.found())
 
-pkg_requires = ['liblzma']
+pkg_requires = ['liblzma', 'libzstd']
 if build_machine.system() == 'windows'
     thread_dep = dependency('libpthreadVC2')
     pkg_requires += ['libpthreadVC2']
@@ -49,12 +51,7 @@ else
     extra_link_args = []
     extra_cpp_args = []
 endif
-if zlib_dep.found()
-    pkg_requires += ['zlib']
-endif
-if zstd_dep.found()
-    pkg_requires += ['libzstd']
-endif
+
 if xapian_dep.found()
     pkg_requires += ['xapian-core']
     icu_dep = dependency('icu-i18n', static:static_linkage)
@@ -73,6 +70,9 @@ subdir('static')
 subdir('src')
 subdir('examples')
 subdir('test')
+if get_option('doc')
+  subdir('docs')
+endif
 
 pkg_mod = import('pkgconfig')
 pkg_mod.generate(libraries : libzim,

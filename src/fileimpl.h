@@ -28,8 +28,10 @@
 #include <zim/zim.h>
 #include <zim/fileheader.h>
 #include <mutex>
-#include "cache.h"
+#include "lrucache.h"
+#include "concurrent_cache.h"
 #include "_dirent.h"
+#include "dirent_lookup.h"
 #include "cluster.h"
 #include "buffer.h"
 #include "file_reader.h"
@@ -51,21 +53,13 @@ namespace zim
       std::unique_ptr<const Reader> urlPtrOffsetReader;
       std::unique_ptr<const Reader> clusterOffsetReader;
 
-      offset_t getOffset(const Reader* reader, size_t idx);
-
-      Cache<article_index_t, std::shared_ptr<const Dirent>> direntCache;
+      lru_cache<article_index_type, std::shared_ptr<const Dirent>> direntCache;
       pthread_mutex_t direntCacheLock;
 
-      Cache<cluster_index_t, std::shared_ptr<Cluster>> clusterCache;
-      pthread_mutex_t clusterCacheLock;
+      typedef std::shared_ptr<const Cluster> ClusterHandle;
+      ConcurrentCache<cluster_index_type, ClusterHandle> clusterCache;
 
       bool cacheUncompressedCluster;
-      typedef std::map<char, article_index_t> NamespaceCache;
-
-      NamespaceCache namespaceBeginCache;
-      pthread_mutex_t namespaceBeginLock;
-      NamespaceCache namespaceEndCache;
-      pthread_mutex_t namespaceEndLock;
 
       typedef std::vector<std::string> MimeTypes;
       MimeTypes mimeTypes;
@@ -73,6 +67,9 @@ namespace zim
       using pair_type = std::pair<cluster_index_type, article_index_type>;
       std::vector<pair_type> articleListByCluster;
       std::once_flag orderOnceFlag;
+
+      using DirentLookup = zim::DirentLookup<FileImpl>;
+      mutable std::unique_ptr<DirentLookup> m_direntLookup;
 
     public:
       explicit FileImpl(const std::string& fname);
@@ -83,13 +80,11 @@ namespace zim
       const Fileheader& getFileheader() const  { return header; }
       zsize_t getFilesize() const;
 
-      std::pair<FileCompound::const_iterator, FileCompound::const_iterator>
-      getFileParts(offset_t offset, zsize_t size);
+      FileCompound::PartRange getFileParts(offset_t offset, zsize_t size);
       std::shared_ptr<const Dirent> getDirent(article_index_t idx);
       std::shared_ptr<const Dirent> getDirentByTitle(article_index_t idx);
       article_index_t getIndexByTitle(article_index_t idx);
       article_index_t getCountArticles() const { return article_index_t(header.getArticleCount()); }
-
 
       std::pair<bool, article_index_t> findx(char ns, const std::string& url);
       std::pair<bool, article_index_t> findx(const std::string& url);
@@ -98,7 +93,7 @@ namespace zim
 
       std::shared_ptr<const Cluster> getCluster(cluster_index_t idx);
       cluster_index_t getCountClusters() const       { return cluster_index_t(header.getClusterCount()); }
-      offset_t getClusterOffset(cluster_index_t idx);
+      offset_t getClusterOffset(cluster_index_t idx) const;
       offset_t getBlobOffset(cluster_index_t clusterIdx, blob_index_t blobIdx);
 
       article_index_t getNamespaceBeginOffset(char ch);
@@ -114,6 +109,18 @@ namespace zim
       std::string getChecksum();
       bool verify();
       bool is_multiPart() const;
+
+      bool checkIntegrity(IntegrityCheck checkType);
+  private:
+      DirentLookup& direntLookup();
+      ClusterHandle readCluster(cluster_index_t idx);
+      void readMimeTypes();
+      void quickCheckForCorruptFile();
+
+      bool checkChecksum();
+      bool checkDirentPtrs();
+      bool checkTitleIndex();
+      bool checkClusterPtrs();
   };
 
 }

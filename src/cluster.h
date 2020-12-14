@@ -27,43 +27,56 @@
 #include <iosfwd>
 #include <vector>
 #include <memory>
+#include <mutex>
 
 #include "zim_types.h"
+#include "zim/error.h"
 
 namespace zim
 {
   class Blob;
   class Reader;
+  class IStreamReader;
 
   class Cluster : public std::enable_shared_from_this<Cluster> {
-      typedef std::vector<offset_t> Offsets;
-
-      const CompressionType compression;
-      const bool isExtended;
-      Offsets offsets;
-      std::shared_ptr<const Reader> reader;
-      offset_t startOffset;
-
-      template<typename OFFSET_TYPE>
-      offset_t read_header();
+      typedef std::vector<offset_t> BlobOffsets;
+      typedef std::vector<std::unique_ptr<const Reader>> BlobReaders;
 
     public:
-      Cluster(std::shared_ptr<const Reader> reader, CompressionType comp, bool isExtended);
+      const CompressionType compression;
+      const bool isExtended;
+
+    private:
+      std::unique_ptr<IStreamReader> m_reader;
+
+      // offsets of the blob boundaries relative to the start of the cluster data
+      // (*after* the first byte (clusterInfo))
+      // For a cluster with N blobs, this collection contains N+1 entries.
+      // The start of the first blob and the end of the last blob are included.
+      BlobOffsets m_blobOffsets;
+
+      mutable std::mutex m_readerAccessMutex;
+      mutable BlobReaders m_blobReaders;
+
+
+      template<typename OFFSET_TYPE>
+      void read_header();
+      const Reader& getReader(blob_index_t n) const;
+
+    public:
+      Cluster(std::unique_ptr<IStreamReader> reader, CompressionType comp, bool isExtended);
       CompressionType getCompression() const   { return compression; }
       bool isCompressed() const                { return compression != zimcompDefault && compression != zimcompNone; }
 
-      blob_index_t count() const               { return blob_index_t(offsets.size() - 1); }
-      zsize_t size() const;
+      blob_index_t count() const               { return blob_index_t(m_blobOffsets.size() - 1); }
 
-      zsize_t getBlobSize(blob_index_t n) const  { return zsize_t(offsets[blob_index_type(n)+1].v
-                                                                - offsets[blob_index_type(n)].v); }
-      offset_t getBlobOffset(blob_index_t n) const { return startOffset + offsets[blob_index_type(n)]; }
+      zsize_t getBlobSize(blob_index_t n) const;
+
+      offset_t getBlobOffset(blob_index_t n) const { return m_blobOffsets[blob_index_type(n)]; }
       Blob getBlob(blob_index_t n) const;
       Blob getBlob(blob_index_t n, offset_t offset, zsize_t size) const;
-      void clear();
 
-      void init_from_buffer(Buffer& buffer);
-      static zsize_t read_size(const Reader* reader, bool isExtended, offset_t offset);
+      static std::shared_ptr<Cluster> read(const Reader& zimReader, offset_t clusterOffset);
   };
 
 }

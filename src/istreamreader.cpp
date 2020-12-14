@@ -17,36 +17,22 @@
  *
  */
 
-#ifndef ZIM_TEST_TEMPFILE_H
-#define ZIM_TEST_TEMPFILE_H
-
-#include <string>
+#include "istreamreader.h"
+#include "buffer_reader.h"
 
 namespace zim
 {
 
-namespace unittests
+////////////////////////////////////////////////////////////////////////////////
+// IDataStream
+////////////////////////////////////////////////////////////////////////////////
+
+std::unique_ptr<const Reader>
+IStreamReader::sub_reader(zsize_t size)
 {
-
-class TempFile
-{
-  int fd_;
-#ifndef _WIN32
-  std::string path_;
-#endif
-public:
-  explicit TempFile(const char* name);
-
-  TempFile(const TempFile& ) = delete;
-  void operator=(const TempFile& ) = delete;
-
-  ~TempFile();
-
-  int fd() const { return fd_; }
-};
-
-} // namespace unittests
+  auto buffer = Buffer::makeBuffer(size);
+  readImpl(const_cast<char*>(buffer.data()), size);
+  return std::unique_ptr<Reader>(new BufferReader(buffer));
+}
 
 } // namespace zim
-
-#endif // ZIM_TEST_TEMPFILE_H

@@ -21,9 +21,7 @@
 #include <zim/error.h>
 #include "file_reader.h"
 #include "file_compound.h"
-#include "cluster.h"
 #include "buffer.h"
-#include "compression.h"
 #include <errno.h>
 #include <string.h>
 #include <cstring>
@@ -33,6 +31,11 @@
 #include <system_error>
 #include <algorithm>
 
+
+#ifndef _WIN32
+#  include <sys/mman.h>
+#  include <unistd.h>
+#endif
 
 #if defined(_MSC_VER)
 # include <io.h>
@@ -60,7 +63,7 @@ FileReader::FileReader(std::shared_ptr<const FileCompound> source, offset_t offs
 char FileReader::read(offset_t offset) const {
   ASSERT(offset.v, <, _size.v);
   offset += _offset;
-  auto part_pair = source->lower_bound(offset);
+  auto part_pair = source->locate(offset);
   auto& fhandle = part_pair->second->fhandle();
   offset_t local_offset = offset - part_pair->first.min;
   ASSERT(local_offset, <=, part_pair->first.max);
@@ -122,8 +125,58 @@ void FileReader::read(char* dest, offset_t offset, zsize_t size) const {
   ASSERT(size.v, ==, 0U);
 }
 
+#ifdef ENABLE_USE_MMAP
+namespace
+{
 
-std::shared_ptr<const Buffer> FileReader::get_buffer(offset_t offset, zsize_t size) const {
+class MMapException : std::exception {};
+
+char*
+mmapReadOnly(int fd, offset_type offset, size_type size)
+{
+#if defined(__APPLE__) || defined(__OpenBSD__)
+  const auto MAP_FLAGS = MAP_PRIVATE;
+#elif defined(__FreeBSD__)
+  const auto MAP_FLAGS = MAP_PRIVATE|MAP_PREFAULT_READ;
+#else
+  const auto MAP_FLAGS = MAP_PRIVATE|MAP_POPULATE;
+#endif
+
+  const auto p = (char*)mmap(NULL, size, PROT_READ, MAP_FLAGS, fd, offset);
+  if (p == MAP_FAILED )
+  {
+    std::ostringstream s;
+    s << "Cannot mmap size " << size << " at off " << offset
+      << " : " << strerror(errno);
+    throw std::runtime_error(s.str());
+  }
+  return p;
+}
+
+Buffer::DataPtr
+makeMmappedBuffer(int fd, offset_t offset, zsize_t size)
+{
+  const offset_type pageAlignedOffset(offset.v & ~(sysconf(_SC_PAGE_SIZE) - 1));
+  const size_t alignmentAdjustment = offset.v - pageAlignedOffset;
+  size += alignmentAdjustment;
+
+#if !MMAP_SUPPORT_64
+  if(pageAlignedOffset >= INT32_MAX) {
+    throw MMapException();
+  }
+#endif
+  char* const mmappedAddress = mmapReadOnly(fd, pageAlignedOffset, size.v);
+  const auto munmapDeleter = [mmappedAddress, size](char* ) {
+                               munmap(mmappedAddress, size.v);
+                             };
+
+  return Buffer::DataPtr(mmappedAddress+alignmentAdjustment, munmapDeleter);
+}
+
+} // unnamed namespace
+#endif // ENABLE_USE_MMAP
+
+const Buffer FileReader::get_buffer(offset_t offset, zsize_t size) const {
   ASSERT(size, <=, _size);
 #ifdef ENABLE_USE_MMAP
   try {
@@ -139,135 +192,29 @@ std::shared_ptr<const Buffer> FileReader::get_buffer(offset_t offset, zsize_t si
     auto local_offset = offset + _offset - range.min;
     ASSERT(size, <=, part->size());
     int fd = part->fhandle().getNativeHandle();
-    auto buffer = std::shared_ptr<const Buffer>(new MMapBuffer(fd, local_offset, size));
-    return buffer;
+    return Buffer::makeBuffer(makeMmappedBuffer(fd, local_offset, size), size);
   } catch(MMapException& e)
 #endif
   {
     // The range is several part, or we are on Windows.
     // We will have to do some memory copies :/
     // [TODO] Use Windows equivalent for mmap.
-    char* p = new char[size.v];
-    auto ret_buffer = std::shared_ptr<const Buffer>(new MemoryBuffer<true>(p, size));
-    read(p, offset, size);
+    auto ret_buffer = Buffer::makeBuffer(size);
+    read(const_cast<char*>(ret_buffer.data()), offset, size);
     return ret_buffer;
   }
 }
 
-bool Reader::can_read(offset_t offset, zsize_t size)
+bool Reader::can_read(offset_t offset, zsize_t size) const
 {
     return (offset.v <= this->size().v && (offset.v+size.v) <= this->size().v);
 }
 
-
-std::shared_ptr<const Buffer> Reader::get_clusterBuffer(offset_t offset, CompressionType comp) const
-{
-  zsize_t uncompressed_size(0);
-  std::unique_ptr<char[]> uncompressed_data;
-  switch (comp) {
-    case zimcompLzma:
-      uncompressed_data = uncompress<LZMA_INFO>(this, offset, &uncompressed_size);
-      break;
-    case zimcompZip:
-#if defined(ENABLE_ZLIB)
-      uncompressed_data = uncompress<ZIP_INFO>(this, offset, &uncompressed_size);
-#else
-      throw std::runtime_error("zlib not enabled in this library");
-#endif
-      break;
-    case zimcompZstd:
-#if defined(ENABLE_ZSTD)
-      uncompressed_data = uncompress<ZSTD_INFO>(this, offset, &uncompressed_size);
-#else
-      throw std::runtime_error("zstd not enabled in this library");
-#endif
-      break;
-    default:
-      throw std::logic_error("compressions should not be something else than zimcompLzma, zimComZip or zimcompZstd.");
-  }
-  return std::shared_ptr<const Buffer>(new MemoryBuffer<true>(uncompressed_data.release(), uncompressed_size));
-}
-
-std::unique_ptr<const Reader> Reader::sub_clusterReader(offset_t offset, CompressionType* comp, bool* extended) const {
-  uint8_t clusterInfo = read(offset);
-  *comp = static_cast<CompressionType>(clusterInfo & 0x0F);
-  *extended = clusterInfo & 0x10;
-
-  switch (*comp) {
-    case zimcompDefault:
-    case zimcompNone:
-      {
-        auto size = Cluster::read_size(this, *extended, offset + offset_t(1));
-      // No compression, just a sub_reader
-        return sub_reader(offset+offset_t(1), size);
-      }
-      break;
-    case zimcompLzma:
-    case zimcompZip:
-    case zimcompZstd:
-      {
-        auto buffer = get_clusterBuffer(offset+offset_t(1), *comp);
-        return std::unique_ptr<Reader>(new BufferReader(buffer));
-      }
-      break;
-    case zimcompBzip2:
-      throw std::runtime_error("bzip2 not enabled in this library");
-    default:
-      throw ZimFileFormatError("Invalid compression flag");
-  }
-}
 
 std::unique_ptr<const Reader> FileReader::sub_reader(offset_t offset, zsize_t size) const
 {
   ASSERT(size, <=, _size);
   return std::unique_ptr<Reader>(new FileReader(source, _offset+offset, size));
 }
-
-
-//BufferReader::BufferReader(std::shared_ptr<Buffer> source)
-//  : source(source) {}
-
-std::shared_ptr<const Buffer> BufferReader::get_buffer(offset_t offset, zsize_t size) const
-{
-  return source->sub_buffer(offset, size);
-}
-
-std::unique_ptr<const Reader> BufferReader::sub_reader(offset_t offset, zsize_t size) const
-{
-  //auto source_addr = source->data(0);
-  auto sub_buff = get_buffer(offset, size);
-  //auto buff_addr = sub_buff->data(0);
-  std::unique_ptr<const Reader> sub_read(new BufferReader(sub_buff));
-  return sub_read;
-}
-
-zsize_t BufferReader::size() const
-{
-  return source->size();
-}
-
-offset_t BufferReader::offset() const
-{
-  return offset_t((offset_type)(static_cast<const void*>(source->data(offset_t(0)))));
-}
-
-
-void BufferReader::read(char* dest, offset_t offset, zsize_t size) const {
-  ASSERT(offset.v, <, source->size().v);
-  ASSERT(offset+offset_t(size.v), <=, offset_t(source->size().v));
-  if (! size ) {
-    return;
-  }
-  memcpy(dest, source->data(offset), size.v);
-}
-
-
-char BufferReader::read(offset_t offset) const {
-  ASSERT(offset.v, <, source->size().v);
-  char dest;
-  dest = *source->data(offset);
-  return dest;
-}
-
 
 } // zim

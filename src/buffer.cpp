@@ -34,43 +34,58 @@
 
 namespace zim {
 
-std::shared_ptr<const Buffer> Buffer::sub_buffer(offset_t offset, zsize_t size) const
+namespace
 {
-  return std::make_shared<SubBuffer>(shared_from_this(), offset, size);
+
+struct NoDelete
+{
+  template<class T> void operator()(T*) {}
+};
+
+// This shared_ptr is used as a source object for the std::shared_ptr
+// aliasing constructor (with the purpose of avoiding the control block
+// allocation) for the case when the referred data must not be deleted.
+static Buffer::DataPtr nonOwnedDataPtr((char*)nullptr, NoDelete());
+
+} // unnamed namespace
+
+const Buffer Buffer::sub_buffer(offset_t offset, zsize_t size) const
+{
+  ASSERT(offset.v, <=, m_size.v);
+  ASSERT(offset.v+size.v, <=, m_size.v);
+  auto sub_data = DataPtr(m_data, data(offset));
+  return Buffer(sub_data, size);
 }
 
-#ifdef ENABLE_USE_MMAP
-MMapBuffer::MMapBuffer(int fd, offset_t offset, zsize_t size):
-  Buffer(size),
-  _offset(0)
+const Buffer Buffer::makeBuffer(const DataPtr& data, zsize_t size)
 {
-  offset_t pa_offset(offset.v & ~(sysconf(_SC_PAGE_SIZE) - 1));
-  _offset = offset-pa_offset;
-#if defined(__APPLE__) || defined(__OpenBSD__)
-  #define MAP_FLAGS MAP_PRIVATE
-#else
-  #define MAP_FLAGS MAP_PRIVATE|MAP_POPULATE
-#endif
-#if !MMAP_SUPPORT_64
-  if(pa_offset.v >= INT32_MAX) {
-    throw MMapException();
+  return Buffer(data, size);
+}
+
+const Buffer Buffer::makeBuffer(const char* data, zsize_t size)
+{
+  return Buffer(DataPtr(nonOwnedDataPtr, data), size);
+}
+
+Buffer Buffer::makeBuffer(zsize_t size)
+{
+  if (0 == size.v) {
+    return Buffer(DataPtr(nonOwnedDataPtr, nullptr), size);
   }
-#endif
-  _data = (char*)mmap(NULL, size.v + _offset.v, PROT_READ, MAP_FLAGS, fd, pa_offset.v);
-  if (_data == MAP_FAILED )
-  {
-    std::ostringstream s;
-    s << "Cannot mmap size " << size.v << " at off " << offset.v << " : " << strerror(errno);
-    throw std::runtime_error(s.str());
-  }
-#undef MAP_FLAGS
+  return Buffer(DataPtr(new char[size.v], std::default_delete<char[]>()), size);
 }
 
-MMapBuffer::~MMapBuffer()
+Buffer::Buffer(const DataPtr& data, zsize_t size)
+  : m_size(size),
+    m_data(data)
 {
-  munmap(_data, size_.v + _offset.v);
+  ASSERT(m_size.v, <, SIZE_MAX);
 }
 
-#endif
+const char*
+Buffer::data(offset_t offset) const {
+  ASSERT(offset.v, <=, m_size.v);
+  return m_data.get() + offset.v;
+}
 
 } //zim

@@ -2,6 +2,8 @@ option('CLUSTER_CACHE_SIZE', type : 'string', value : '16',
   description : 'set cluster cache size to number (default:16)')
 option('DIRENT_CACHE_SIZE', type : 'string', value : '512',
   description : 'set dirent cache size to number (default:512)')
+option('DIRENT_LOOKUP_CACHE_SIZE', type : 'string', value : '1024',
+  description : 'set dirent lookup cache size to number (default:1024)')
 option('LZMA_MEMORY_SIZE', type : 'string', value : '128',
   description : 'set lzma uncompress memory in MB (default:128)')
 option('USE_MMAP', type: 'boolean', value: true,
@@ -12,3 +14,5 @@ Header index are used to access articles, having them in memory can improve acce
 If false, we directly read the index in the file at each article access.''')
 option('static-linkage', type : 'boolean', value : false,
   description : 'Link statically with the dependencies.')
+option('doc', type : 'boolean', value : false,
+  description : 'Build the documentations.')

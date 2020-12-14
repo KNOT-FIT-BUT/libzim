@@ -22,6 +22,7 @@
 
 #include "file_part.h"
 #include "zim_types.h"
+#include "debug.h"
 #include <map>
 #include <memory>
 #include <cstdio>
@@ -31,8 +32,12 @@ namespace zim {
 class FileReader;
 
 struct Range {
-  Range(const offset_t point ) : min(point), max(point) {}
-  Range(const offset_t  min, const offset_t max) : min(min), max(max) {}
+  Range(const offset_t  min, const offset_t max)
+    : min(min), max(max)
+  {
+      // ASSERT(min, <, max);
+  }
+
   const offset_t min;
   const offset_t max;
 };
@@ -44,23 +49,53 @@ struct less_range : public std::binary_function< Range, Range, bool>
   }
 };
 
-class FileCompound : public std::map<Range, FilePart<>*, less_range> {
-  public:
+class FileCompound : private std::map<Range, FilePart<>*, less_range> {
+    typedef std::map<Range, FilePart<>*, less_range> ImplType;
+
+  public: // types
+    typedef const_iterator PartIterator;
+    typedef std::pair<PartIterator, PartIterator> PartRange;
+
+  public: // functions
     FileCompound(const std::string& filename);
     FileCompound(FilePart<>* fpart);
     ~FileCompound();
+
+    using ImplType::begin;
+    using ImplType::end;
 
     zsize_t fsize() const { return _fsize; };
     time_t getMTime() const;
     bool fail() const { return empty(); };
     bool is_multiPart() const { return size() > 1; };
 
-    std::pair<FileCompound::const_iterator, FileCompound::const_iterator>
-    locate(offset_t offset, zsize_t size) const {
-        return equal_range(Range(offset, offset+size));
+    PartIterator locate(offset_t offset) const {
+      const PartIterator partIt = lower_bound(Range(offset, offset));
+      ASSERT(partIt != end(), ==, true);
+      return partIt;
     }
 
-  private:
+    PartRange locate(offset_t offset, zsize_t size) const {
+#if ! defined(__APPLE__)
+        return equal_range(Range(offset, offset+size));
+#else
+        // Workaround for https://github.com/openzim/libzim/issues/398
+        // Under MacOS the implementation of std::map::equal_range() makes
+        // assumptions about the properties of the key comparison function and
+        // abuses the std::map requirement that it must contain unique keys. As
+        // a result, when a map m is queried with an element k that is
+        // equivalent to more than one keys present in m,
+        // m.equal_range(k).first may be different from m.lower_bound(k) (the
+        // latter one returning the correct result).
+        const Range queryRange(offset, offset+size);
+        return {lower_bound(queryRange), upper_bound(queryRange)};
+#endif // ! defined(__APPLE__)
+    }
+
+  private: // functions
+    void addPart(FilePart<>* fpart);
+
+  private: // data
     zsize_t _fsize;
     mutable time_t mtime;
 };
